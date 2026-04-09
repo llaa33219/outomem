@@ -8,6 +8,7 @@ from typing import Any
 import tiktoken
 
 _VALID_ROLES = {"user", "assistant", "system"}
+_RAW_MARKER = "raw"
 
 _cl100k_encoding: tiktoken.Encoding | None = None
 
@@ -44,12 +45,10 @@ def format_conversation(
 
 
 def _parse_string_conversation(text: str) -> list[dict[str, str]]:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
+    stripped = text.strip()
+    if not stripped:
         return []
-
-    roles = ("user", "assistant")
-    return [{"role": roles[i % 2], "content": line} for i, line in enumerate(lines)]
+    return [{"role": _RAW_MARKER, "content": stripped}]
 
 
 def _validate_message_list(messages: list[dict[str, str]]) -> list[dict[str, str]]:

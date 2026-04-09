@@ -32,7 +32,7 @@ The `raw_facts` layer acts as the foundation of the memory system. Original cont
 ```
 
 **Query Timing:**
-This layer is queried during `get_context` to provide raw evidence for the LLM to synthesize.
+This layer is queried during `get_context` only when the LLM retrieval planner determines it is relevant to the query.
 
 ## personalization
 
@@ -55,7 +55,7 @@ This layer tracks user-specific traits, likes, and dislikes. Sentiment analysis 
 ```
 
 **Query Timing:**
-Queried during every `get_context` call to ensure the agent respects user preferences.
+Queried when the LLM retrieval planner determines user preferences are relevant to the query.
 
 ## long_term
 
@@ -69,7 +69,7 @@ Consolidated factual knowledge lives here. Unlike personalization, these facts a
 The system checks for existing facts using a 0.85 similarity threshold. If a match exists, it doesn't add a duplicate.
 
 **Query Timing:**
-Used to provide the agent with a stable knowledge base about the world or the user's environment.
+Used when the query involves factual knowledge or topics the user has discussed.
 
 ## temporal_sessions
 
@@ -90,11 +90,15 @@ This layer records the timeline of events. Capturing when things happened and ho
 ```
 
 **Query Timing:**
-Queried to give the agent a sense of time and recent history.
+Queried when the LLM retrieval planner determines events or historical context are relevant to the query.
 
 ## How Categorization Works
 
-The `remember()` method sends conversation text to an LLM with an extraction prompt. Classification into `personal`, `factual`, and `temporal` categories happens during this step.
+The `remember()` method sends conversation text to an LLM with an extraction prompt. The LLM receives existing memories as context to avoid duplicates and contradictions. It classifies information into `personal`, `factual`, and `temporal` categories while also:
+
+- Deciding what is truly worth storing (vs casual mentions)
+- Assessing emotional intensity (high/medium/low)
+- Identifying potential contradictions with existing memories
 
 After extraction, the system runs `_detect_sentiment` on personal facts. Keywords like "좋아" (like) or "싫어" (hate) help assign a sentiment. Identifying if the user is expressing a preference becomes easier with this data.
 

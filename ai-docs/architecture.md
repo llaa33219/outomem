@@ -43,8 +43,8 @@ For the reasoning behind this hybrid approach, see [philosophy.md](philosophy.md
 The `remember()` method processes new information and updates the memory stores.
 
 ```text
-Conversation -> [Format] -> [LLM Extraction] -> [Sentiment Detection]
-                                                     |
+Conversation -> [Format] -> [LLM Extraction with Context Awareness]
+                                                      |
       +----------------------------------------------+
       |
       v
@@ -52,7 +52,7 @@ Conversation -> [Format] -> [LLM Extraction] -> [Sentiment Detection]
 ```
 
 1. **Format conversation**: Converts input into a standardized list of message objects.
-2. **LLM extraction**: Uses the extraction prompt to identify personal, factual, and temporal data points.
+2. **LLM extraction with existing memory context**: The LLM receives existing memories as context to avoid duplicates and contradictions. It decides what is truly worth storing, assigns emotional intensity, and categorizes into personal/factual/temporal.
 3. **Sentiment detection**: Assigns emotional polarity using keyword matching.
 4. **Contradiction check**: Compares new personalizations against existing ones using vector similarity and sentiment polarity.
 5. **Dual-write**: Persists data to both LanceDB and Neo4j simultaneously.
@@ -63,25 +63,22 @@ Conversation -> [Format] -> [LLM Extraction] -> [Sentiment Detection]
 The `get_context()` method retrieves and synthesizes relevant memories for a given query.
 
 ```text
-Query -> [Embedding] -> [Multi-Layer Search] -> [Recalculate Strength]
-                                                      |
-      +-----------------------------------------------+
+Query -> [LLM Retrieval Planning] -> [Layer-Specific Search] -> [LLM Filter]
+                                                               |
+      +--------------------------------------------------------+
       |
       v
-[Record Access] -> [LLM Synthesis] -> [Token Truncation] -> Context
+[Recalculate Strength] -> [Record Access] -> [LLM Synthesis] -> Context
 ```
 
 1. **Format conversation**: Prepares the recent history for context retrieval.
-2. **Compute embedding**: Generates a vector representation of the query.
-3. **Search 4 layers**: Queries LanceDB for the most relevant entries across all layers:
-   - **personalization**: 5 results
-   - **long_term**: 5 results
-   - **raw_facts**: 2 results
-   - **temporal_sessions**: 5 results
-4. **Recalculate strengths**: Applies time-based decay to personalization entries.
-5. **Record access**: Updates access counts and timestamps in both stores.
-6. **LLM synthesis**: Combines retrieved facts into a coherent context string using the synthesis prompt.
-7. **Token truncation**: Ensures the final output fits within the model's token limits.
+2. **LLM Retrieval Planning**: The LLM analyzes the query and decides which layers to search and what search queries to use for each layer.
+3. **Layer-specific search**: Each selected layer is searched with its own optimized embedding query.
+4. **LLM Filter**: The LLM judges which retrieved memories are actually relevant to the query.
+5. **Recalculate strengths**: Applies time-based decay to personalization entries.
+6. **Record access**: Updates access counts and timestamps in both stores.
+7. **LLM synthesis**: Combines retrieved facts into a coherent context string using the synthesis prompt.
+8. **Token truncation**: Ensures the final output fits within the model's token limits.
 
 ## Storage Architecture
 
@@ -115,11 +112,13 @@ The system maintains consistency by writing to both LanceDB and Neo4j within the
 
 ## LLM Integration Points
 
-Language models perform three critical tasks in the pipeline:
+Language models perform five critical tasks in the pipeline:
 
-1. **Extraction**: Identifying structured facts from raw conversation text.
-2. **Consolidation**: Merging overlapping or redundant personalization entries.
-3. **Context Synthesis**: Turning a list of retrieved facts into a natural language prompt.
+1. **Extraction**: Identifying structured facts from raw conversation text, with awareness of existing memories to avoid duplicates.
+2. **Retrieval Planning**: Analyzing the query to decide which memory layers to search and generating optimized search queries per layer.
+3. **Retrieval Filtering**: Judging which retrieved memories are actually relevant to the current query.
+4. **Consolidation**: Merging overlapping or redundant personalization entries.
+5. **Context Synthesis**: Turning a list of retrieved facts into a natural language prompt.
 
 ## Embedding Pipeline
 

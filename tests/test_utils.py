@@ -34,21 +34,22 @@ class TestFormatConversation:
         with pytest.raises(ValueError, match="must have 'role' and 'content'"):
             format_conversation(conv)
 
-    def test_string_conversation_parses_alternating(self) -> None:
+    def test_string_returns_raw_marker(self) -> None:
         text = "Hello\nHow are you"
         result = format_conversation(text)
-        assert result == [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "How are you"},
-        ]
+        assert len(result) == 1
+        assert result[0]["role"] == "raw"
+        assert result[0]["content"] == "Hello\nHow are you"
 
     def test_string_empty_returns_empty_list(self) -> None:
         result = format_conversation("")
         assert result == []
 
-    def test_string_single_line(self) -> None:
+    def test_string_single_line_returns_raw_marker(self) -> None:
         result = format_conversation("Hello")
-        assert result == [{"role": "user", "content": "Hello"}]
+        assert len(result) == 1
+        assert result[0]["role"] == "raw"
+        assert result[0]["content"] == "Hello"
 
     def test_wrong_type_raises(self) -> None:
         with pytest.raises(TypeError, match="must be list\\[dict\\] or str"):

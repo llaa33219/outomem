@@ -6,6 +6,8 @@ Memory consolidation is the process of merging similar or duplicate memories int
 
 Consolidation happens during the `remember()` cycle. If the system detects that a new memory is highly similar to existing ones, it sets `duplicates_found=True`. This flag triggers a background process that pulls all current personalization layers and sends them to an LLM for deduplication.
 
+Note: The extraction step now includes `emotional_intensity` assessment from the LLM, which informs the boost values during consolidation.
+
 ## The Consolidation Prompt
 
 The system uses a specific prompt to guide the LLM in identifying what to merge. It looks like this:

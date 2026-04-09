@@ -26,14 +26,10 @@ memory = Outomem(
     embed_api_url="https://api.openai.com/v1",
     embed_api_key="your-api-key",
     embed_model="text-embedding-3-small",
-    db_config={
-        "vector_store": "lancedb",
-        "vector_path": "./outomem.lance",
-        "graph_store": "neo4j",
-        "graph_uri": "bolt://localhost:7687",
-        "graph_user": "neo4j",
-        "graph_password": "password",
-    },
+    neo4j_uri="bolt://localhost:7687",
+    neo4j_user="neo4j",
+    neo4j_password="password",
+    db_path="./outomem.lance",
     style_path="./style.md"
 )
 

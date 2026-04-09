@@ -5,12 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 EXTRACTION_SYSTEM_PROMPT = (
-    "You are a memory analyst for an AI agent. "
-    "Extract key facts from conversations and classify them into memory layers. "
+    "You are a thoughtful memory analyst for an AI agent. "
+    "Your job is to carefully analyze the conversation and decide what is truly WORTH REMEMBERING. "
+    "Not everything mentioned should be stored — only meaningful, lasting information. "
     "Output only valid JSON. No explanations."
 )
 
-_EXTRACTION_USER_TEMPLATE = """Extract preference/fact from this user message.
+_EXTRACTION_USER_TEMPLATE = """Analyze this conversation and extract ONLY the information that is genuinely worth storing in long-term memory.
 
 CONVERSATION:
 {conversation}
@@ -18,16 +19,36 @@ CONVERSATION:
 STYLE CONTEXT:
 {style}
 
+EXISTING MEMORIES (for deduplication — do NOT repeat similar information):
+{existing_memories}
+
+INSTRUCTIONS:
+1. Think carefully: What here is a lasting preference vs. casual mention?
+2. What here is new information that adds to existing memories?
+3. What contradicts existing memories?
+4. Rate emotional intensity: strong (미치게, 사랑, 최고, heaven, 불타 etc.) = high, casual mentions = low
+5. Clean up and clarify the content — store clear, well-formed statements
+
 OUTPUT FORMAT (must follow exactly):
-{{"personal": ["preference1", "preference2"], "factual": [], "temporal": []}}
+{{
+  "personal": [
+    {{"content": "the cleaned up preference statement", "emotional_intensity": "high|medium|low", "is_contradiction": false}},
+    ...
+  ],
+  "factual": ["objective fact 1", "objective fact 2"],
+  "temporal": ["event that occurred"],
+  "do_not_store": ["casual mentions not worth remembering"]
+}}
 
 Rules:
-- personal: User likes, dislikes, communication preferences, habits
-- factual: Objective facts, topics discussed, knowledge
-- temporal: Events, when something happened
-- Each item: max 80 characters, in Korean
-- Use empty arrays [] if no facts for that category
-- Output ONLY the JSON. No explanation. Start with {{"""
+- personal: User's lasting preferences, likes, dislikes, habits, communication style
+- factual: Objective facts, topics discussed, knowledge the user shared
+- temporal: Events or things that happened with a sense of time
+- do_not_store: Casual mentions, one-time comments, or obvious things that don't need remembering
+- Be selective! If something is already covered by existing memories, mark as do_not_store or contradiction
+- Write content in the user's language (Korean if conversation is Korean)
+- Content should be clear and complete sentences, not fragments
+- Output ONLY the JSON. No explanation."""
 
 CONSOLIDATION_SYSTEM_PROMPT = (
     "You are a memory deduplication system. "
@@ -106,26 +127,6 @@ def _format_memories_text(memories: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def get_extraction_prompt(
-    conversation: list[dict[str, Any]] | str, style: str
-) -> tuple[str, str]:
-    """Build prompts for fact extraction from a conversation.
-
-    Args:
-        conversation: Conversation as message list or plain string.
-        style: Contents of the user's style.md file.
-
-    Returns:
-        (system_prompt, user_prompt) tuple ready for LLMProvider.complete().
-    """
-    conv_text = _format_conversation_text(conversation)
-    user_prompt = _EXTRACTION_USER_TEMPLATE.format(
-        conversation=conv_text,
-        style=style or "(no style context)",
-    )
-    return EXTRACTION_SYSTEM_PROMPT, user_prompt
-
-
 def get_consolidation_prompt(memories: list[dict[str, Any]]) -> tuple[str, str]:
     """Build prompts for memory deduplication and consolidation.
 
@@ -184,6 +185,82 @@ Focus on describing the USER — not instructing the AI.
 The user's strong emotions (흥분, 열정, 사랑, 쾌감, 미치게, 최고, 영원히 etc.) should be clearly present.
 Keep it natural and specific — one smooth paragraph, no lists, no headers."""
 
+RETRIEVAL_JUDGMENT_SYSTEM = (
+    "You are a memory relevance judge. "
+    "Your job is to determine which retrieved memories are actually relevant to the current query. "
+    "Output only valid JSON. No explanations."
+)
+
+RETRIEVAL_JUDGMENT_USER = """Given the user's query and a list of retrieved memories, determine which memories are genuinely relevant.
+
+USER QUERY:
+{query}
+
+RETRIEVED MEMORIES:
+{memories}
+
+INSTRUCTIONS:
+1. Analyze the query to understand what information would be helpful
+2. For each memory, judge its relevance: Is it directly useful? Background context? Or irrelevant?
+3. Consider: Does this memory help answer the query or understand the user's situation?
+4. Select ONLY the memories that are clearly relevant
+
+OUTPUT FORMAT (must follow exactly):
+{{
+  "selected_memories": [
+    {{"id": "memory_id", "relevance": "high|medium|low", "reason": "why this is relevant"}},
+    ...
+  ],
+  "reasoning": "brief explanation of your selection logic"
+}}
+
+Rules:
+- Only include memories with relevance "high" or "medium" unless truly necessary
+- "low" relevance memories should be excluded — they add noise
+- If no memories are relevant, return empty selected_memories
+- Output ONLY the JSON. No explanation."""
+
+
+def get_extraction_prompt(
+    conversation: list[dict[str, Any]] | str,
+    style: str,
+    existing_memories: str = "(none)",
+) -> tuple[str, str]:
+    """Build prompts for fact extraction from a conversation.
+
+    Args:
+        conversation: Conversation as message list or plain string.
+        style: Contents of the user's style.md file.
+        existing_memories: Existing memories for deduplication awareness.
+
+    Returns:
+        (system_prompt, user_prompt) tuple ready for LLMProvider.complete().
+    """
+    conv_text = _format_conversation_text(conversation)
+    user_prompt = _EXTRACTION_USER_TEMPLATE.format(
+        conversation=conv_text,
+        style=style or "(no style context)",
+        existing_memories=existing_memories,
+    )
+    return EXTRACTION_SYSTEM_PROMPT, user_prompt
+
+
+def get_retrieval_judgment_prompt(query: str, memories: str) -> tuple[str, str]:
+    """Build prompts for LLM to judge which memories are relevant to a query.
+
+    Args:
+        query: The user's query or conversation context.
+        memories: Formatted list of retrieved memories to evaluate.
+
+    Returns:
+        (system_prompt, user_prompt) tuple ready for LLMProvider.complete().
+    """
+    user_prompt = RETRIEVAL_JUDGMENT_USER.format(
+        query=query,
+        memories=memories,
+    )
+    return RETRIEVAL_JUDGMENT_SYSTEM, user_prompt
+
 
 def get_context_synthesis_prompt(
     conversation: str,
@@ -207,9 +284,59 @@ def get_context_synthesis_prompt(
     return sys_prompt, user_prompt
 
 
+RETRIEVAL_PLAN_SYSTEM = (
+    "You are a memory retrieval planner. "
+    "Analyze the user's query and decide exactly what information to retrieve. "
+    "Output only valid JSON. No explanations."
+)
+
+RETRIEVAL_PLAN_USER = """Analyze this query and create a retrieval plan.
+
+USER QUERY:
+{query}
+
+MEMORY LAYERS:
+- personalization: User preferences, likes, dislikes, habits
+- long_term: Factual knowledge, topics discussed
+- temporal_sessions: Events, things that happened
+- raw_facts: Original conversation data
+
+INSTRUCTIONS:
+1. Analyze what information the user is looking for
+2. Decide which layers to search (can be 1-4 layers)
+3. Generate the best search query for EACH selected layer
+4. Focus on the primary intent: preference inquiry, fact lookup, event recall, or general context
+
+OUTPUT FORMAT (must follow exactly):
+{{
+  "intent": "what the user is looking for in 1-2 words",
+  "layers_to_search": {{
+    "personalization": "search query for personalization layer (in Korean)",
+    "long_term": "search query for long_term layer (in Korean)",
+    "temporal_sessions": "search query for temporal layer (in Korean)",
+    "raw_facts": "search query for raw_facts layer (in Korean)"
+  }},
+  "reasoning": "brief explanation of why you chose these layers and queries"
+}}
+
+Rules:
+- Set search_query to empty string "" for layers you don't need to search
+- For layers you do need, write a query that will find the most relevant memories
+- Write queries in Korean if the user query is in Korean
+- Be specific but concise in your search queries
+- Output ONLY the JSON. No explanation."""
+
+
+def get_retrieval_plan_prompt(query: str) -> tuple[str, str]:
+    user_prompt = RETRIEVAL_PLAN_USER.format(query=query)
+    return RETRIEVAL_PLAN_SYSTEM, user_prompt
+
+
 __all__ = [
     "get_extraction_prompt",
     "get_consolidation_prompt",
     "get_summarization_prompt",
     "get_context_synthesis_prompt",
+    "get_retrieval_judgment_prompt",
+    "get_retrieval_plan_prompt",
 ]

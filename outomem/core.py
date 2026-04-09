@@ -8,6 +8,8 @@ from outomem.prompts import (
     get_consolidation_prompt,
     get_context_synthesis_prompt,
     get_extraction_prompt,
+    get_retrieval_judgment_prompt,
+    get_retrieval_plan_prompt,
 )
 from outomem.providers import LLMProvider, create_provider
 from outomem.utils import (
@@ -127,14 +129,33 @@ class Outomem:
         self._lancedb.recalculate_all_strengths()
         self._neo4j.recalculate_all_strengths()
 
+    def _get_existing_memories_summary(self) -> str:
+        all_pers = self._lancedb.get_all_personalizations()
+        all_lt = self._lancedb.get_all_long_term()
+        lines = []
+        for p in all_pers[:10]:
+            if p.get("is_active", True):
+                lines.append(f"- [personal] {p.get('content', '')}")
+        for lt in all_lt[:5]:
+            lines.append(f"- [factual] {lt.get('content', '')}")
+        return "\n".join(lines) if lines else "(no existing memories)"
+
     def remember(self, conversation: list[dict[str, str]] | str) -> None:
         conv_list = format_conversation(conversation)
         if not conv_list:
             return
 
+        # Check if raw format detected (needs LLM parsing)
+        raw_entries = [e for e in conv_list if e.get("role") == "raw"]
+        if raw_entries:
+            conv_list = self._llm_parse_conversation(raw_entries[0]["content"])
+
         conv_text = self._format_conv_for_llm(conv_list)
 
-        sys_prompt, user_prompt = get_extraction_prompt(conv_text, self._style)
+        existing_memories = self._get_existing_memories_summary()
+        sys_prompt, user_prompt = get_extraction_prompt(
+            conv_text, self._style, existing_memories
+        )
         raw_response = self._provider.complete(user_prompt, sys_prompt)
         parsed = safe_json_parse(raw_response)
         if not isinstance(parsed, dict):
@@ -145,29 +166,51 @@ class Outomem:
         personal = parsed.get("personal", [])
         factual = parsed.get("factual", [])
         temporal = parsed.get("temporal", [])
+        do_not_store = parsed.get("do_not_store", [])
 
         duplicates_found = False
+        personal_contents = []
 
-        for fact in personal:
-            if not isinstance(fact, str) or not fact.strip():
+        for fact_item in personal:
+            if isinstance(fact_item, dict):
+                content = fact_item.get("content", "").strip()
+                if not content:
+                    continue
+                intensity = fact_item.get("emotional_intensity", "medium")
+                is_contradiction = fact_item.get("is_contradiction", False)
+            elif isinstance(fact_item, str):
+                content = fact_item.strip()
+                if not content:
+                    continue
+                intensity = "medium"
+                is_contradiction = False
+            else:
                 continue
-            sentiment = self._detect_sentiment(fact)
+
+            personal_contents.append(content)
+            sentiment = self._detect_sentiment(content)
+
+            intensity_boost_map = {"high": 0.25, "medium": 0.15, "low": 0.08}
+            boost = intensity_boost_map.get(intensity, 0.15)
+
             similar = self._lancedb.find_active_similar_personalizations(
-                fact, threshold=0.85
+                content, threshold=0.85
             )
             if similar:
                 existing = similar[0]
-                if self._is_contradictory(existing["sentiment"], sentiment):
+                if is_contradiction or self._is_contradictory(
+                    existing["sentiment"], sentiment
+                ):
                     existing_active = (
                         self._lancedb.find_active_similar_personalizations(
-                            fact, threshold=0.95
+                            content, threshold=0.95
                         )
                     )
                     if existing_active:
                         self._lancedb.deactivate_personalization(existing["id"])
                         self._neo4j.deactivate_personalization(existing["id"])
                         change_event_content = (
-                            f"취향 변화: {existing['content']} → {fact}"
+                            f"취향 변화: {existing['content']} → {content}"
                         )
                         self._lancedb.add_temporal(
                             session_id=session_id,
@@ -176,7 +219,7 @@ class Outomem:
                             metadata="{}",
                             related_personalization_id=existing["id"],
                             old_content=existing["content"],
-                            new_content=fact,
+                            new_content=content,
                         )
                         self._neo4j.add_temporal(
                             session_id=session_id,
@@ -185,18 +228,18 @@ class Outomem:
                             metadata="{}",
                             related_personalization_id=existing["id"],
                             old_content=existing["content"],
-                            new_content=fact,
+                            new_content=content,
                         )
                         self._lancedb.add_personalization(
-                            content=fact,
+                            content=content,
                             category="preference",
                             strength=0.8,
                             sentiment=sentiment,
                             contradiction_with=existing["id"],
                         )
-                        fact_vector = self._compute_embedding(fact)
+                        fact_vector = self._compute_embedding(content)
                         self._neo4j.add_personalization(
-                            content=fact,
+                            content=content,
                             category="preference",
                             strength=0.8,
                             sentiment=sentiment,
@@ -206,29 +249,29 @@ class Outomem:
                         duplicates_found = True
                     else:
                         self._lancedb.boost_personalization_strength(
-                            existing["id"], boost=0.15
+                            existing["id"], boost=boost
                         )
                         self._neo4j.boost_personalization_strength(
-                            existing["id"], boost=0.15
+                            existing["id"], boost=boost
                         )
                 else:
                     self._lancedb.boost_personalization_strength(
-                        existing["id"], boost=0.15
+                        existing["id"], boost=boost
                     )
                     self._neo4j.boost_personalization_strength(
-                        existing["id"], boost=0.15
+                        existing["id"], boost=boost
                     )
                     duplicates_found = True
             else:
                 self._lancedb.add_personalization(
-                    content=fact,
+                    content=content,
                     category="preference",
                     strength=1.0,
                     sentiment=sentiment,
                 )
-                fact_vector = self._compute_embedding(fact)
+                fact_vector = self._compute_embedding(content)
                 self._neo4j.add_personalization(
-                    content=fact,
+                    content=content,
                     category="preference",
                     strength=1.0,
                     sentiment=sentiment,
@@ -256,10 +299,14 @@ class Outomem:
                 content=fact,
             )
 
-        for fact in temporal + factual + personal:
-            if not isinstance(fact, str) or not fact.strip():
-                continue
-            self._lancedb.add_raw_fact(content=fact, conversation=conv_text)
+        all_facts_for_raw = (
+            [f for f in temporal]
+            + [f for f in factual if isinstance(f, str)]
+            + personal_contents
+        )
+        for fact in all_facts_for_raw:
+            if isinstance(fact, str) and fact.strip():
+                self._lancedb.add_raw_fact(content=fact, conversation=conv_text)
 
         if duplicates_found:
             all_personalizations = self._lancedb.get_all_personalizations()
@@ -301,6 +348,29 @@ class Outomem:
             content = msg.get("content", "")
             lines.append(f"{role}: {content}")
         return "\n".join(lines)
+
+    def _llm_parse_conversation(self, raw_text: str) -> list[dict[str, str]]:
+        prompt = f"""Parse this text into a conversation format. Identify which parts are:
+- USER: user's messages (actual human input)
+- ASSISTANT: AI/agent's responses
+
+Original text:
+{raw_text}
+
+Output ONLY valid JSON array:
+[{{"role": "user", "content": "..."}}, {{"role": "assistant", "content": "..."}}]
+
+Rules:
+- This tool call is from an AGENT, so AI responses in the text should be marked as "assistant"
+- Identify actual user input even without explicit markers
+- Preserve original meaning and complete thoughts
+- Return ONLY the JSON array, no explanation"""
+
+        response = self._provider.complete(prompt, "")
+        parsed = safe_json_parse(response)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            return parsed
+        return [{"role": "user", "content": raw_text}]
 
     def _compute_embedding(self, text: str) -> list[float]:
         return self._lancedb._compute_embedding(text)
@@ -363,6 +433,61 @@ class Outomem:
             parts.append(f"참고: {raw.replace(chr(10), ', ')}")
         return ". ".join(parts) if parts else "(기억 없음)"
 
+    def _llm_plan_retrieval(
+        self,
+        query: str,
+    ) -> dict[str, Any]:
+        sys_p, usr_p = get_retrieval_plan_prompt(query)
+        raw_response = self._provider.complete(usr_p, sys_p)
+        parsed = safe_json_parse(raw_response)
+        if isinstance(parsed, dict):
+            return parsed
+        return {
+            "intent": "general",
+            "layers_to_search": {
+                "personalization": query,
+                "long_term": query,
+                "temporal_sessions": query,
+                "raw_facts": query,
+            },
+            "reasoning": "fallback to full search",
+        }
+
+    def _llm_filter_memories(
+        self,
+        query: str,
+        pers_results: list[dict[str, Any]],
+        lt_results: list[dict[str, Any]],
+        temp_results: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        pers_text = self._format_memories_list(pers_results, with_strength=True)
+        lt_text = self._format_memories_list(lt_results, with_strength=False)
+        temp_text = self._format_events_list(temp_results)
+
+        all_memories = f"PERSONALIZATION:\n{pers_text}\n\nLONG_TERM:\n{lt_text}\n\nTEMPORAL:\n{temp_text}"
+
+        sys_p, usr_p = get_retrieval_judgment_prompt(query, all_memories)
+        raw_response = self._provider.complete(usr_p, sys_p)
+        parsed = safe_json_parse(raw_response)
+
+        if not isinstance(parsed, dict):
+            return pers_results, lt_results, temp_results
+
+        selected = parsed.get("selected_memories", [])
+        selected_ids = {s.get("id") for s in selected if isinstance(s, dict)}
+
+        if not selected_ids:
+            return [], [], []
+
+        def filter_by_id(results, ids):
+            return [r for r in results if r.get("id") in ids]
+
+        return (
+            filter_by_id(pers_results, selected_ids),
+            filter_by_id(lt_results, selected_ids),
+            filter_by_id(temp_results, selected_ids),
+        )
+
     def get_context(
         self,
         full_history: list[dict[str, str]] | str | None = None,
@@ -375,17 +500,42 @@ class Outomem:
 
         conv_list = format_conversation(full_history)
         conv_text = self._format_conv_for_llm(conv_list)
-        query_embedding = self._compute_embedding(conv_text)
 
-        pers_results = self._lancedb.search("personalization", query_embedding, limit=5)
-        lt_results = self._lancedb.search("long_term", query_embedding, limit=5)
-        raw_results = self._lancedb.search("raw_facts", query_embedding, limit=2)
-        temp_results = self._lancedb.search(
-            "temporal_sessions", query_embedding, limit=5
-        )
+        plan = self._llm_plan_retrieval(conv_text)
+        layers_to_search = plan.get("layers_to_search", {})
 
-        for results in [pers_results, lt_results, raw_results, temp_results]:
-            results.sort(key=lambda r: r.get("_distance", float("inf")))
+        pers_results: list[dict[str, Any]] = []
+        lt_results: list[dict[str, Any]] = []
+        temp_results: list[dict[str, Any]] = []
+        raw_results: list[dict[str, Any]] = []
+
+        if layers_to_search.get("personalization"):
+            pers_query = layers_to_search["personalization"]
+            pers_embedding = self._compute_embedding(pers_query)
+            pers_results = self._lancedb.search(
+                "personalization", pers_embedding, limit=5
+            )
+            pers_results.sort(key=lambda r: r.get("_distance", float("inf")))
+
+        if layers_to_search.get("long_term"):
+            lt_query = layers_to_search["long_term"]
+            lt_embedding = self._compute_embedding(lt_query)
+            lt_results = self._lancedb.search("long_term", lt_embedding, limit=5)
+            lt_results.sort(key=lambda r: r.get("_distance", float("inf")))
+
+        if layers_to_search.get("temporal_sessions"):
+            temp_query = layers_to_search["temporal_sessions"]
+            temp_embedding = self._compute_embedding(temp_query)
+            temp_results = self._lancedb.search(
+                "temporal_sessions", temp_embedding, limit=5
+            )
+            temp_results.sort(key=lambda r: r.get("_distance", float("inf")))
+
+        if layers_to_search.get("raw_facts"):
+            raw_query = layers_to_search["raw_facts"]
+            raw_embedding = self._compute_embedding(raw_query)
+            raw_results = self._lancedb.search("raw_facts", raw_embedding, limit=2)
+            raw_results.sort(key=lambda r: r.get("_distance", float("inf")))
 
         self._recalculate_strengths()
 
