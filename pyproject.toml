@@ -1,7 +1,8 @@
 [project]
 name = "outomem"
-version = "0.2.0"
+version = "0.2.1"
 description = "The ultimate memory system library for AI agents."
+readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 dependencies = [
