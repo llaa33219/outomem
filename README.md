@@ -75,4 +75,4 @@ See [Architecture](ai-docs/architecture.md) for more details.
 
 ## License
 
-MIT
+Apache License 2.0 - See [LICENSE](LICENSE)
