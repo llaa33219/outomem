@@ -14,6 +14,10 @@ def create_provider(
         from outomem.providers.openai_client import OpenAIProvider
 
         return OpenAIProvider(base_url=base_url, api_key=api_key, model=model)
+    elif provider == "openai-responses":
+        from outomem.providers.openai_responses_client import OpenAIResponsesProvider
+
+        return OpenAIResponsesProvider(base_url=base_url, api_key=api_key, model=model)
     elif provider == "anthropic":
         from outomem.providers.anthropic_client import AnthropicProvider
 
@@ -24,7 +28,7 @@ def create_provider(
         return GoogleProvider(base_url=base_url, api_key=api_key, model=model)
     else:
         raise ValueError(
-            f"Unknown provider: {provider!r}. Must be one of: 'openai', 'anthropic', 'google'"
+            f"Unknown provider: {provider!r}. Must be one of: 'openai', 'openai-responses', 'anthropic', 'google'"
         )
 
 

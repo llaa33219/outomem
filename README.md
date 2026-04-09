@@ -19,11 +19,11 @@ from outomem import Outomem
 
 # Initialize the memory system
 memory = Outomem(
-    provider="openai",
-    base_url="https://api.openai.com/v1",
+    provider="openai-responses",
+    base_url="https://api.openai.com/v1/responses",
     api_key="your-api-key",
-    model="gpt-4o",
-    embed_api_url="https://api.openai.com/v1",
+    model="gpt-5.4",
+    embed_api_url="https://api.openai.com/v1/embeddings",
     embed_api_key="your-api-key",
     embed_model="text-embedding-3-small",
     neo4j_uri="bolt://localhost:7687",
