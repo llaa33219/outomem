@@ -129,3 +129,16 @@ The system uses Cypher's duration functions to calculate decay [Line 262]:
 WITH p, duration.between(p.last_accessed, datetime()).days AS days_elapsed
 SET p.strength = p.initial_strength * p.decay_factor ^ days_elapsed
 ```
+
+## Health Check Methods
+
+### `check_connection() -> bool` [Line 440]
+Executes `RETURN 1 AS health` to verify the driver can reach the database. Returns `False` on `Neo4jError` or `ServiceUnavailable`.
+
+### `get_node_counts() -> dict[str, int]` [Line 448]
+Returns counts for three node types:
+- `personalization`: Total Personalization nodes.
+- `temporal_session`: Total TemporalSession nodes.
+- `session`: Total Session nodes.
+
+Returns `-1` for any query that fails.

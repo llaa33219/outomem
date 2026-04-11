@@ -436,3 +436,29 @@ class Neo4jLayerManager:
             database_=self._database,
         )
         return [dict(record["related"]) for record in records]
+
+    def check_connection(self) -> bool:
+        try:
+            records, _, _ = self._driver.execute_query(
+                "RETURN 1 AS health", database_=self._database
+            )
+            return len(records) == 1 and records[0]["health"] == 1
+        except (Neo4jError, ServiceUnavailable):
+            return False
+
+    def get_node_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        queries = {
+            "personalization": "MATCH (p:Personalization) RETURN count(p) AS cnt",
+            "temporal_session": "MATCH (t:TemporalSession) RETURN count(t) AS cnt",
+            "session": "MATCH (s:Session) RETURN count(s) AS cnt",
+        }
+        for name, query in queries.items():
+            try:
+                records, _, _ = self._driver.execute_query(
+                    query, database_=self._database
+                )
+                counts[name] = records[0]["cnt"] if records else 0
+            except (Neo4jError, ServiceUnavailable):
+                counts[name] = -1
+        return counts

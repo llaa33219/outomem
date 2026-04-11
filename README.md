@@ -41,6 +41,23 @@ context = memory.get_context("What are the user's UI preferences?")
 print(context)
 ```
 
+## Health Check
+
+Verify that all memory system components are operational before processing requests.
+
+```python
+status = memory.health_check()
+
+if status["healthy"]:
+    print("All systems operational")
+else:
+    print(f"LanceDB: {status['lancedb']['connected']}")
+    print(f"Neo4j: {status['neo4j']['connected']}")
+    print(f"Embedding: {status['embedding']['working']}")
+```
+
+The `health_check()` method returns a dict with connection status for LanceDB, Neo4j, and the embedding function, plus table statistics and node counts.
+
 ## Philosophy
 
 See [Design Philosophy](ai-docs/philosophy.md).

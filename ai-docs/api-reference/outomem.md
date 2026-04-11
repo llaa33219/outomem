@@ -92,6 +92,62 @@ context = memory.get_context("What should we have for dinner?")
 # Returns: "The user loves spicy food but dislikes cilantro..."
 ```
 
+### `health_check()`
+
+Checks if all memory system components are operational.
+
+**Source:** `core.py:580`
+
+*   **Input:** None
+*   **Return:** `dict[str, Any]`
+
+**Check Components:**
+1.  **LanceDB:** Verifies database connection and all four tables exist.
+2.  **Embedding:** Confirms the embedding function returns vectors of correct dimension (384).
+3.  **Neo4j:** Tests graph database connectivity.
+
+**Return Structure:**
+```python
+{
+    "healthy": bool,           # True only if all checks pass
+    "lancedb": {
+        "connected": bool,     # LanceDB connection status
+        "tables": {            # Per-table existence
+            "raw_facts": bool,
+            "long_term": bool,
+            "personalization": bool,
+            "temporal_sessions": bool,
+        },
+        "stats": {             # Row counts per table
+            "raw_facts": int,
+            "long_term": int,
+            "personalization": int,
+            "temporal_sessions": int,
+        },
+    },
+    "embedding": {
+        "working": bool,       # Embedding function status
+    },
+    "neo4j": {
+        "connected": bool,     # Neo4j connection status
+        "node_counts": {       # Node counts by type
+            "personalization": int,
+            "temporal_session": int,
+            "session": int,
+        },
+    },
+}
+```
+
+**Example:**
+```python
+status = memory.health_check()
+if not status["healthy"]:
+    print(f"LanceDB: {status['lancedb']['connected']}")
+    print(f"Neo4j: {status['neo4j']['connected']}")
+    print(f"Embedding: {status['embedding']['working']}")
+```
+
 ## Private Methods
 
 These methods handle internal logic for sentiment and memory maintenance.

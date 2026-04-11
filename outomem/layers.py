@@ -517,3 +517,50 @@ class LayerManager:
                     }
                 )
         return sorted(similar, key=lambda x: x["similarity"], reverse=True)
+
+    def check_connection(self) -> bool:
+        """Check if LanceDB connection is alive."""
+        try:
+            _ = self._db.list_tables()
+            return True
+        except Exception:
+            return False
+
+    def check_tables(self) -> dict[str, bool]:
+        """Check if all required tables exist and are accessible."""
+        results: dict[str, bool] = {}
+        existing = self._db.list_tables().tables
+        for name in SCHEMAS:
+            try:
+                if name in existing:
+                    table = self._open(name)
+                    _ = table.count_rows()
+                    results[name] = True
+                else:
+                    results[name] = False
+            except Exception:
+                results[name] = False
+        return results
+
+    def get_table_stats(self) -> dict[str, int]:
+        """Get row count for each table."""
+        stats: dict[str, int] = {}
+        for name in SCHEMAS:
+            try:
+                table = self._open(name)
+                stats[name] = table.count_rows()
+            except Exception:
+                stats[name] = -1
+        return stats
+
+    def check_embedding(self, test_text: str = "health check test") -> bool:
+        """Verify embedding function works correctly."""
+        try:
+            embedding = self._compute_embedding(test_text)
+            return (
+                isinstance(embedding, list)
+                and len(embedding) == VECTOR_DIM
+                and all(isinstance(x, float) for x in embedding)
+            )
+        except Exception:
+            return False

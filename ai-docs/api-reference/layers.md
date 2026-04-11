@@ -150,3 +150,24 @@ Tracks session-specific events and state changes.
 | `recalculate_all_strengths()` | Applies time-based decay to all records. | 272 |
 | `recalculate_and_apply_boost(id, repeat_count, base_strength)` | Decays then boosts a specific record. | 235 |
 | `decay_personalization(factor)` | Multiplies all strengths by a factor. | 311 |
+
+## Health Check Methods
+
+| Method | Description | Line |
+| :--- | :--- | :--- |
+| `check_connection()` | Tests if LanceDB connection is alive. | 521 |
+| `check_tables()` | Verifies all four tables exist and are accessible. | 529 |
+| `get_table_stats()` | Returns row counts for each table. | 543 |
+| `check_embedding(test_text)` | Confirms embedding function returns correct dimension. | 553 |
+
+### `check_connection() -> bool`
+Returns `True` if `list_tables()` succeeds without exception.
+
+### `check_tables() -> dict[str, bool]`
+Returns a dict mapping each table name to its accessibility status.
+
+### `get_table_stats() -> dict[str, int]`
+Returns row counts. Returns `-1` for tables that fail to open.
+
+### `check_embedding(test_text: str = "health check test") -> bool`
+Validates that the embedding function returns a 384-dimensional float list.

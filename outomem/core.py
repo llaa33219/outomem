@@ -576,3 +576,28 @@ Rules:
             context = truncate_to_token_limit(context, max_tokens, model)
 
         return context
+
+    def health_check(self) -> dict[str, Any]:
+        lancedb_ok = self._lancedb.check_connection()
+        tables = self._lancedb.check_tables()
+        table_stats = self._lancedb.get_table_stats()
+        embedding_ok = self._lancedb.check_embedding()
+        neo4j_ok = self._neo4j.check_connection()
+        node_counts = self._neo4j.get_node_counts()
+
+        all_tables_ok = all(tables.values())
+        overall = lancedb_ok and all_tables_ok and embedding_ok and neo4j_ok
+
+        return {
+            "healthy": overall,
+            "lancedb": {
+                "connected": lancedb_ok,
+                "tables": tables,
+                "stats": table_stats,
+            },
+            "embedding": {"working": embedding_ok},
+            "neo4j": {
+                "connected": neo4j_ok,
+                "node_counts": node_counts,
+            },
+        }
