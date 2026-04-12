@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -11,7 +11,7 @@ import pyarrow.compute as pc  # type: ignore[reportMissingTypeStubs]
 
 import lancedb
 
-VECTOR_DIM = 384
+DEFAULT_VECTOR_DIM = 384
 DEFAULT_LOCAL_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
@@ -29,66 +29,65 @@ def _default_fastembed_embed(texts: list[str]) -> list[list[float]]:
     return [emb.tolist() for emb in embedder.embed(texts)]
 
 
-SCHEMAS: dict[str, pa.Schema] = {
-    "raw_facts": pa.schema(
-        [
-            pa.field("id", pa.utf8()),
-            pa.field("content", pa.utf8()),
-            pa.field("conversation", pa.utf8()),
-            pa.field("layer", pa.utf8()),
-            pa.field("created_at", pa.timestamp("us", tz="UTC")),
-            pa.field("vector", pa.list_(pa.float32(), VECTOR_DIM)),
-        ]
-    ),
-    "long_term": pa.schema(
-        [
-            pa.field("id", pa.utf8()),
-            pa.field("content", pa.utf8()),
-            pa.field("source_facts", pa.list_(pa.utf8())),
-            pa.field("layer", pa.utf8()),
-            pa.field("created_at", pa.timestamp("us", tz="UTC")),
-            pa.field("updated_at", pa.timestamp("us", tz="UTC")),
-            pa.field("access_count", pa.int64()),
-            pa.field("vector", pa.list_(pa.float32(), VECTOR_DIM)),
-        ]
-    ),
-    "personalization": pa.schema(
-        [
-            pa.field("id", pa.utf8()),
-            pa.field("content", pa.utf8()),
-            pa.field("category", pa.utf8()),
-            pa.field("sentiment", pa.utf8()),  # "positive", "negative", "neutral"
-            pa.field("layer", pa.utf8()),
-            pa.field("created_at", pa.timestamp("us", tz="UTC")),
-            pa.field("updated_at", pa.timestamp("us", tz="UTC")),
-            pa.field("strength", pa.float64()),
-            pa.field("decay_factor", pa.float64()),
-            pa.field("initial_strength", pa.float64()),
-            pa.field("last_accessed", pa.timestamp("us", tz="UTC")),
-            pa.field("access_count", pa.int64()),
-            pa.field(
-                "contradiction_with", pa.utf8()
-            ),  # ID of contradictory fact, if any
-            pa.field("is_active", pa.bool_()),  # False if superseded by contradiction
-            pa.field("vector", pa.list_(pa.float32(), VECTOR_DIM)),
-        ]
-    ),
-    "temporal_sessions": pa.schema(
-        [
-            pa.field("id", pa.utf8()),
-            pa.field("session_id", pa.utf8()),
-            pa.field("event_type", pa.utf8()),
-            pa.field("content", pa.utf8()),
-            pa.field("timestamp", pa.timestamp("us", tz="UTC")),
-            pa.field("layer", pa.utf8()),
-            pa.field("metadata", pa.string()),
-            pa.field("vector", pa.list_(pa.float32(), VECTOR_DIM)),
-            pa.field("related_personalization_id", pa.utf8()),
-            pa.field("old_content", pa.utf8()),
-            pa.field("new_content", pa.utf8()),
-        ]
-    ),
-}
+def build_schemas(vector_dim: int) -> dict[str, pa.Schema]:
+    return {
+        "raw_facts": pa.schema(
+            [
+                pa.field("id", pa.utf8()),
+                pa.field("content", pa.utf8()),
+                pa.field("conversation", pa.utf8()),
+                pa.field("layer", pa.utf8()),
+                pa.field("created_at", pa.timestamp("us", tz="UTC")),
+                pa.field("vector", pa.list_(pa.float32(), vector_dim)),
+            ]
+        ),
+        "long_term": pa.schema(
+            [
+                pa.field("id", pa.utf8()),
+                pa.field("content", pa.utf8()),
+                pa.field("source_facts", pa.list_(pa.utf8())),
+                pa.field("layer", pa.utf8()),
+                pa.field("created_at", pa.timestamp("us", tz="UTC")),
+                pa.field("updated_at", pa.timestamp("us", tz="UTC")),
+                pa.field("access_count", pa.int64()),
+                pa.field("vector", pa.list_(pa.float32(), vector_dim)),
+            ]
+        ),
+        "personalization": pa.schema(
+            [
+                pa.field("id", pa.utf8()),
+                pa.field("content", pa.utf8()),
+                pa.field("category", pa.utf8()),
+                pa.field("sentiment", pa.utf8()),
+                pa.field("layer", pa.utf8()),
+                pa.field("created_at", pa.timestamp("us", tz="UTC")),
+                pa.field("updated_at", pa.timestamp("us", tz="UTC")),
+                pa.field("strength", pa.float64()),
+                pa.field("decay_factor", pa.float64()),
+                pa.field("initial_strength", pa.float64()),
+                pa.field("last_accessed", pa.timestamp("us", tz="UTC")),
+                pa.field("access_count", pa.int64()),
+                pa.field("contradiction_with", pa.utf8()),
+                pa.field("is_active", pa.bool_()),
+                pa.field("vector", pa.list_(pa.float32(), vector_dim)),
+            ]
+        ),
+        "temporal_sessions": pa.schema(
+            [
+                pa.field("id", pa.utf8()),
+                pa.field("session_id", pa.utf8()),
+                pa.field("event_type", pa.utf8()),
+                pa.field("content", pa.utf8()),
+                pa.field("timestamp", pa.timestamp("us", tz="UTC")),
+                pa.field("layer", pa.utf8()),
+                pa.field("metadata", pa.string()),
+                pa.field("vector", pa.list_(pa.float32(), vector_dim)),
+                pa.field("related_personalization_id", pa.utf8()),
+                pa.field("old_content", pa.utf8()),
+                pa.field("new_content", pa.utf8()),
+            ]
+        ),
+    }
 
 
 class LayerManager:
@@ -96,9 +95,12 @@ class LayerManager:
         self,
         db_path: str = "./outomem.lance",
         embed_fn: EmbeddingFunction | None = None,
+        vector_dim: int = DEFAULT_VECTOR_DIM,
     ) -> None:
         self._db = lancedb.connect(db_path)
         self._embed_fn = embed_fn or _default_fastembed_embed
+        self._vector_dim = vector_dim
+        self._schemas = build_schemas(vector_dim)
         self._last_connection_error: str | None = None
         self._last_table_errors: dict[str, str] = {}
         self._last_embedding_error: str | None = None
@@ -109,7 +111,7 @@ class LayerManager:
 
     def _init_collections(self) -> None:
         existing = self._db.list_tables().tables
-        for name, schema in SCHEMAS.items():
+        for name, schema in self._schemas.items():
             if name not in existing:
                 self._db.create_table(name, schema=schema)
 
@@ -127,8 +129,151 @@ class LayerManager:
         now = datetime.now(timezone.utc)
         return f"sess_{now.strftime('%Y%m%d_%H%M%S')}"
 
+    @staticmethod
+    def _serialize_backup_value(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, list):
+            return [LayerManager._serialize_backup_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: LayerManager._serialize_backup_value(item)
+                for key, item in value.items()
+            }
+        return value
+
+    @staticmethod
+    def _parse_backup_datetime(value: Any) -> datetime | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value.astimezone(timezone.utc)
+        if isinstance(value, str):
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        raise TypeError(f"Unsupported datetime value: {type(value).__name__}")
+
+    def _clear_table(self, name: str) -> None:
+        table = self._open(name)
+        rows = table.to_arrow().to_pylist()
+        for row in rows:
+            row_id = row.get("id")
+            if row_id:
+                table.delete(f"id = '{row_id}'")
+
     def _open(self, name: str):
         return self._db.open_table(name)
+
+    def export_data(self) -> dict[str, Any]:
+        exported: dict[str, Any] = {}
+        for name in ("raw_facts", "long_term", "personalization", "temporal_sessions"):
+            rows = self._open(name).to_arrow().to_pylist()
+            exported[name] = [
+                {
+                    key: self._serialize_backup_value(value)
+                    for key, value in row.items()
+                    if key != "vector"
+                }
+                for row in rows
+            ]
+        return exported
+
+    def import_data(self, data: dict[str, Any], embed_fn: EmbeddingFunction) -> None:
+        for table_name in (
+            "raw_facts",
+            "long_term",
+            "personalization",
+            "temporal_sessions",
+        ):
+            self._clear_table(table_name)
+
+        raw_fact_rows: list[dict[str, Any]] = []
+        for row in data.get("raw_facts", []):
+            content = str(row["content"])
+            raw_fact_rows.append(
+                {
+                    "id": row["id"],
+                    "content": content,
+                    "conversation": row["conversation"],
+                    "layer": row.get("layer", "raw_facts"),
+                    "created_at": self._parse_backup_datetime(row["created_at"]),
+                    "vector": embed_fn([content])[0],
+                }
+            )
+        if raw_fact_rows:
+            self._open("raw_facts").add(raw_fact_rows)
+
+        long_term_rows: list[dict[str, Any]] = []
+        for row in data.get("long_term", []):
+            content = str(row["content"])
+            long_term_rows.append(
+                {
+                    "id": row["id"],
+                    "content": content,
+                    "source_facts": row.get("source_facts", []),
+                    "layer": row.get("layer", "long_term"),
+                    "created_at": self._parse_backup_datetime(row["created_at"]),
+                    "updated_at": self._parse_backup_datetime(row["updated_at"]),
+                    "access_count": row.get("access_count", 0),
+                    "vector": embed_fn([content])[0],
+                }
+            )
+        if long_term_rows:
+            self._open("long_term").add(long_term_rows)
+
+        personalization_rows: list[dict[str, Any]] = []
+        for row in data.get("personalization", []):
+            content = str(row["content"])
+            personalization_rows.append(
+                {
+                    "id": row["id"],
+                    "content": content,
+                    "category": row["category"],
+                    "sentiment": row.get("sentiment", "neutral"),
+                    "layer": row.get("layer", "personalization"),
+                    "created_at": self._parse_backup_datetime(row["created_at"]),
+                    "updated_at": self._parse_backup_datetime(row["updated_at"]),
+                    "strength": row.get("strength", 1.0),
+                    "decay_factor": row.get("decay_factor", 0.95),
+                    "initial_strength": row.get(
+                        "initial_strength", row.get("strength", 1.0)
+                    ),
+                    "last_accessed": self._parse_backup_datetime(
+                        row.get("last_accessed")
+                    ),
+                    "access_count": row.get("access_count", 0),
+                    "contradiction_with": row.get("contradiction_with"),
+                    "is_active": row.get("is_active", True),
+                    "vector": embed_fn([content])[0],
+                }
+            )
+        if personalization_rows:
+            self._open("personalization").add(personalization_rows)
+
+        temporal_rows: list[dict[str, Any]] = []
+        for row in data.get("temporal_sessions", []):
+            content = str(row["content"])
+            temporal_rows.append(
+                {
+                    "id": row["id"],
+                    "session_id": row["session_id"],
+                    "event_type": row["event_type"],
+                    "content": content,
+                    "timestamp": self._parse_backup_datetime(row["timestamp"]),
+                    "layer": row.get("layer", "temporal_sessions"),
+                    "metadata": row.get("metadata", "{}"),
+                    "vector": embed_fn([content])[0],
+                    "related_personalization_id": row.get(
+                        "related_personalization_id", ""
+                    ),
+                    "old_content": row.get("old_content", ""),
+                    "new_content": row.get("new_content", ""),
+                }
+            )
+        if temporal_rows:
+            self._open("temporal_sessions").add(temporal_rows)
 
     def add_raw_fact(self, content: str, conversation: str) -> str:
         fact_id = self._gen_id()
@@ -376,7 +521,7 @@ class LayerManager:
         query_embedding: list[float],
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        if layer not in SCHEMAS:
+        if layer not in self._schemas:
             raise ValueError(f"Unknown layer: {layer}")
         table = self._open(layer)
         if table.count_rows() == 0:
@@ -474,12 +619,10 @@ class LayerManager:
 
     def boost_personalization_strength(self, id: str, boost: float = 0.15) -> float:
         table = self._open("personalization")
-        at = table.to_arrow()
-        mask = pc.equal(at.column("id"), id)
-        filtered = at.filter(mask)
-        if filtered.num_rows == 0:
+        rows = [row for row in table.to_arrow().to_pylist() if row["id"] == id]
+        if not rows:
             return 0.0
-        current = filtered.column("strength")[0].as_py()
+        current = rows[0]["strength"]
         new_strength = min(1.0, current + boost)
         table.update(
             where=f"id = '{id}'",
@@ -540,7 +683,7 @@ class LayerManager:
         results: dict[str, bool] = {}
         self._last_table_errors = {}
         existing = self._db.list_tables().tables
-        for name in SCHEMAS:
+        for name in self._schemas:
             try:
                 if name in existing:
                     table = self._open(name)
@@ -561,7 +704,7 @@ class LayerManager:
     def get_table_stats(self) -> dict[str, int]:
         """Get row count for each table."""
         stats: dict[str, int] = {}
-        for name in SCHEMAS:
+        for name in self._schemas:
             try:
                 table = self._open(name)
                 stats[name] = table.count_rows()
@@ -575,14 +718,14 @@ class LayerManager:
             embedding = self._compute_embedding(test_text)
             is_valid = (
                 isinstance(embedding, list)
-                and len(embedding) == VECTOR_DIM
+                and len(embedding) == self._vector_dim
                 and all(isinstance(x, float) for x in embedding)
             )
             if is_valid:
                 self._last_embedding_error = None
             else:
                 self._last_embedding_error = (
-                    f"Invalid embedding: expected list of {VECTOR_DIM} floats, "
+                    f"Invalid embedding: expected list of {self._vector_dim} floats, "
                     f"got {type(embedding).__name__} with length {len(embedding) if isinstance(embedding, list) else 'N/A'}"
                 )
             return is_valid

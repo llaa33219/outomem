@@ -30,7 +30,8 @@ memory = Outomem(
     neo4j_user="neo4j",
     neo4j_password="password",
     db_path="./outomem.lance",
-    style_path="./style.md"
+    style_path="./style.md",
+    embed_dim=768,  # Match your embedding model dimensions
 )
 
 # Store a new memory
@@ -39,6 +40,9 @@ memory.remember("I prefer dark mode for all my applications.")
 # Get context for a query
 context = memory.get_context("What are the user's UI preferences?")
 print(context)
+
+# Backup before changing embedding model
+memory.export_backup("./backup.json")
 ```
 
 ## Health Check
@@ -81,6 +85,15 @@ See [Architecture](ai-docs/architecture.md) for more details.
 ### Core Concepts
 - [Design Philosophy](ai-docs/philosophy.md)
 - [Architecture](ai-docs/architecture.md)
+
+### Guides
+- [Quickstart](ai-docs/guides/quickstart.md)
+- [Backup & Restore](ai-docs/guides/backup-restore.md)
+
+### API Reference
+- [Outomem](ai-docs/api-reference/outomem.md)
+- [LayerManager](ai-docs/api-reference/layers.md)
+- [Neo4jLayerManager](ai-docs/api-reference/neo4j-layers.md)
 
 ### Project Management
 - [Governance](ai-docs/GOVERNANCE.md)

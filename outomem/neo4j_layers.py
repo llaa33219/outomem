@@ -54,6 +54,250 @@ class Neo4jLayerManager:
         now = datetime.now(timezone.utc)
         return f"sess_{now.strftime('%Y%m%d_%H%M%S')}"
 
+    @staticmethod
+    def _serialize_backup_value(value: Any) -> Any:
+        if hasattr(value, "iso_format"):
+            return value.iso_format()
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, list):
+            return [Neo4jLayerManager._serialize_backup_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: Neo4jLayerManager._serialize_backup_value(item)
+                for key, item in value.items()
+            }
+        return value
+
+    def _clear_graph(self) -> None:
+        self._driver.execute_query(
+            """
+            MATCH (n)
+            WHERE n:Personalization OR n:TemporalSession OR n:Session
+            DETACH DELETE n
+            """,
+            database_=self._database,
+        )
+
+    def export_data(self) -> dict[str, Any]:
+        personalizations_records, _, _ = self._driver.execute_query(
+            """
+            MATCH (p:Personalization)
+            OPTIONAL MATCH (p)-[r:CONTRADICTED_BY]->(target:Personalization)
+            WITH p, collect(
+                CASE
+                    WHEN r IS NULL THEN NULL
+                    ELSE {
+                        type: type(r),
+                        target_id: target.id,
+                        timestamp: r.timestamp
+                    }
+                END
+            ) AS relationships
+            RETURN p, relationships
+            ORDER BY p.created_at DESC
+            """,
+            database_=self._database,
+        )
+        temporal_records, _, _ = self._driver.execute_query(
+            """
+            MATCH (t:TemporalSession)
+            OPTIONAL MATCH (t)-[r:AFFECTED]->(p:Personalization)
+            WITH t, collect(
+                CASE
+                    WHEN r IS NULL THEN NULL
+                    ELSE {
+                        type: type(r),
+                        target_id: p.id
+                    }
+                END
+            ) AS relationships
+            RETURN t, relationships
+            ORDER BY t.timestamp DESC
+            """,
+            database_=self._database,
+        )
+        session_records, _, _ = self._driver.execute_query(
+            """
+            MATCH (s:Session)
+            OPTIONAL MATCH (s)-[r:HAS_EVENT]->(t:TemporalSession)
+            WITH s, collect(
+                CASE
+                    WHEN r IS NULL THEN NULL
+                    ELSE {
+                        type: type(r),
+                        target_id: t.id
+                    }
+                END
+            ) AS relationships
+            RETURN s, relationships
+            ORDER BY s.id ASC
+            """,
+            database_=self._database,
+        )
+
+        def clean_relationships(items: list[Any]) -> list[dict[str, Any]]:
+            return [
+                self._serialize_backup_value(item) for item in items if item is not None
+            ]
+
+        personalizations = []
+        for record in personalizations_records:
+            props = {
+                key: self._serialize_backup_value(value)
+                for key, value in dict(record["p"]).items()
+                if key != "vector"
+            }
+            props["relationships"] = clean_relationships(record["relationships"])
+            personalizations.append(props)
+
+        temporal_sessions = []
+        for record in temporal_records:
+            props = {
+                key: self._serialize_backup_value(value)
+                for key, value in dict(record["t"]).items()
+            }
+            props["relationships"] = clean_relationships(record["relationships"])
+            temporal_sessions.append(props)
+
+        sessions = []
+        for record in session_records:
+            props = {
+                key: self._serialize_backup_value(value)
+                for key, value in dict(record["s"]).items()
+            }
+            props["relationships"] = clean_relationships(record["relationships"])
+            sessions.append(props)
+
+        return {
+            "personalizations": personalizations,
+            "temporal_sessions": temporal_sessions,
+            "sessions": sessions,
+        }
+
+    def import_data(
+        self,
+        data: dict[str, Any],
+        embed_fn,
+    ) -> None:
+        self._clear_graph()
+
+        for row in data.get("personalizations", []):
+            content = str(row["content"])
+            vector = embed_fn([content])[0]
+            self._driver.execute_query(
+                """
+                CREATE (p:Personalization {
+                    id: $id,
+                    content: $content,
+                    category: $category,
+                    sentiment: $sentiment,
+                    strength: $strength,
+                    decay_factor: $decay_factor,
+                    initial_strength: $initial_strength,
+                    is_active: $is_active,
+                    created_at: datetime($created_at),
+                    updated_at: datetime($updated_at),
+                    last_accessed: datetime($last_accessed),
+                    access_count: $access_count,
+                    vector: $vector
+                })
+                """,
+                id=row["id"],
+                content=content,
+                category=row["category"],
+                sentiment=row.get("sentiment", "neutral"),
+                strength=row.get("strength", 1.0),
+                decay_factor=row.get("decay_factor", 0.95),
+                initial_strength=row.get("initial_strength", row.get("strength", 1.0)),
+                is_active=row.get("is_active", True),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                last_accessed=row.get("last_accessed", row["updated_at"]),
+                access_count=row.get("access_count", 0),
+                vector=vector,
+                database_=self._database,
+            )
+
+        for row in data.get("temporal_sessions", []):
+            self._driver.execute_query(
+                """
+                CREATE (t:TemporalSession {
+                    id: $id,
+                    session_id: $session_id,
+                    event_type: $event_type,
+                    content: $content,
+                    timestamp: datetime($timestamp),
+                    metadata: $metadata,
+                    old_content: $old_content,
+                    new_content: $new_content
+                })
+                """,
+                id=row["id"],
+                session_id=row["session_id"],
+                event_type=row["event_type"],
+                content=row["content"],
+                timestamp=row["timestamp"],
+                metadata=row.get("metadata", "{}"),
+                old_content=row.get("old_content", ""),
+                new_content=row.get("new_content", ""),
+                database_=self._database,
+            )
+
+        for row in data.get("sessions", []):
+            props = {key: value for key, value in row.items() if key != "relationships"}
+            self._driver.execute_query(
+                "CREATE (s:Session) SET s = $props",
+                props=props,
+                database_=self._database,
+            )
+
+        for row in data.get("personalizations", []):
+            for relationship in row.get("relationships", []):
+                if relationship.get("type") != "CONTRADICTED_BY":
+                    continue
+                self._driver.execute_query(
+                    """
+                    MATCH (source:Personalization {id: $source_id})
+                    MATCH (target:Personalization {id: $target_id})
+                    CREATE (source)-[:CONTRADICTED_BY {timestamp: datetime($timestamp)}]->(target)
+                    """,
+                    source_id=row["id"],
+                    target_id=relationship["target_id"],
+                    timestamp=relationship["timestamp"],
+                    database_=self._database,
+                )
+
+        for row in data.get("sessions", []):
+            for relationship in row.get("relationships", []):
+                if relationship.get("type") != "HAS_EVENT":
+                    continue
+                self._driver.execute_query(
+                    """
+                    MATCH (source:Session {id: $source_id})
+                    MATCH (target:TemporalSession {id: $target_id})
+                    CREATE (source)-[:HAS_EVENT]->(target)
+                    """,
+                    source_id=row["id"],
+                    target_id=relationship["target_id"],
+                    database_=self._database,
+                )
+
+        for row in data.get("temporal_sessions", []):
+            for relationship in row.get("relationships", []):
+                if relationship.get("type") != "AFFECTED":
+                    continue
+                self._driver.execute_query(
+                    """
+                    MATCH (source:TemporalSession {id: $source_id})
+                    MATCH (target:Personalization {id: $target_id})
+                    CREATE (source)-[:AFFECTED]->(target)
+                    """,
+                    source_id=row["id"],
+                    target_id=relationship["target_id"],
+                    database_=self._database,
+                )
+
     def add_personalization(
         self,
         content: str,

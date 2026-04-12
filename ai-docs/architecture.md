@@ -120,10 +120,47 @@ Language models perform five critical tasks in the pipeline:
 4. **Consolidation**: Merging overlapping or redundant personalization entries.
 5. **Context Synthesis**: Turning a list of retrieved facts into a natural language prompt.
 
+## Backup & Restore
+
+Outomem provides backup functionality to preserve memory data when changing embedding models or migrating environments.
+
+### Design Principles
+
+- **Text Preservation**: Backup contains raw text content, not vectors.
+- **Re-embedding**: Vectors are regenerated during restore using the current embedding function.
+- **Relationship Preservation**: Neo4j contradiction chains and event links are maintained.
+- **Cross-DB Consistency**: Original IDs are preserved to maintain LanceDB ↔ Neo4j references.
+
+### Data Flow
+
+```text
+[Export]                    [Import]
+    |                           |
+    v                           v
+LanceDB (4 tables) ──► JSON ◄── Neo4j (nodes + relationships)
+    |                           |
+    +── Strip vectors           +── Re-embed content
+    +── Serialize timestamps    +── Restore nodes
+    +── Export relationships    +── Restore relationships
+```
+
+See [Backup & Restore Guide](guides/backup-restore.md) for detailed usage.
+
 ## Embedding Pipeline
 
 The system uses a consistent embedding process for all vector operations:
 
-- **Vector Dimension**: 384 (optimized for `all-MiniLM-L6-v2`).
+- **Vector Dimension**: Configurable via `embed_dim` parameter (default: 384 for `all-MiniLM-L6-v2`).
+- **Schema Generation**: LanceDB schemas are built dynamically at initialization using `build_schemas(vector_dim)`.
 - **Generation**: API-based embeddings computed during both write and read operations.
 - **Similarity**: Cosine similarity is used for all retrieval tasks.
+
+### Supported Dimensions
+
+| Model | Dimensions | Notes |
+| :--- | :--- | :--- |
+| `all-MiniLM-L6-v2` | 384 | Default, local fastembed |
+| `text-embedding-3-small` | 1536 | OpenAI, API-based |
+| `text-embedding-3-large` | 3072 | OpenAI, API-based |
+
+When changing models, use the [backup & restore](guides/backup-restore.md) workflow to re-embed all content.

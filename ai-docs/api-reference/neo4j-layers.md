@@ -142,3 +142,64 @@ Returns counts for three node types:
 - `session`: Total Session nodes.
 
 Returns `-1` for any query that fails.
+
+## Backup Methods
+
+These methods enable data export and import for migration between embedding models.
+
+### `export_data() -> dict[str, Any]`
+
+Exports all nodes and relationships without vectors. Used internally by `Outomem.export_backup()`.
+
+**Source:** [neo4j_layers.py:82](../../outomem/neo4j_layers.py#L82)
+
+**Returns:**
+```python
+{
+    "personalizations": [
+        {
+            "id": "...",
+            "content": "...",
+            "category": "...",
+            "relationships": [
+                {"type": "CONTRADICTED_BY", "target_id": "...", "timestamp": "..."}
+            ]
+        }
+    ],
+    "temporal_sessions": [
+        {
+            "id": "...",
+            "content": "...",
+            "relationships": [
+                {"type": "AFFECTED", "target_id": "..."}
+            ]
+        }
+    ],
+    "sessions": [
+        {
+            "id": "...",
+            "relationships": [
+                {"type": "HAS_EVENT", "target_id": "..."}
+            ]
+        }
+    ]
+}
+```
+
+Vectors are excluded from personalization nodes. Relationships are serialized as arrays within each node.
+
+### `import_data(data: dict[str, Any], embed_fn) -> None`
+
+Imports data from a backup dictionary, re-embedding all content. Used internally by `Outomem.import_backup()`.
+
+**Source:** [neo4j_layers.py:178](../../outomem/neo4j_layers.py#L178)
+
+**Parameters:**
+- `data`: Backup dictionary with node contents and relationships.
+- `embed_fn`: Embedding function to re-embed all personalization content.
+
+**Behavior:**
+1. Clears all existing nodes (`DETACH DELETE`).
+2. Re-embeds all personalization content using `embed_fn`.
+3. Creates all nodes with original IDs and metadata.
+4. Restores all relationships (`CONTRADICTED_BY`, `HAS_EVENT`, `AFFECTED`).

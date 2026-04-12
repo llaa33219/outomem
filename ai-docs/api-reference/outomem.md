@@ -25,6 +25,7 @@ def __init__(
     neo4j_password: str,
     db_path: str = "./outomem.lance",
     style_path: str = "./style.md",
+    embed_dim: int = 384,
 ) -> None
 ```
 
@@ -42,6 +43,9 @@ def __init__(
 | `neo4j_password` | `str` | Password for Neo4j authentication. |
 | `db_path` | `str` | Path to the LanceDB database file. |
 | `style_path` | `str` | Path to the markdown file defining the agent's style. |
+| `embed_dim` | `int` | Embedding vector dimensions. Default: 384 (for `all-MiniLM-L6-v2`). Set to match your embedding model (e.g., 768 for `text-embedding-3-small`, 3072 for `text-embedding-3-large`). |
+
+**Important:** The `embed_dim` parameter determines the vector schema for all LanceDB tables. Changing the embedding model requires re-embedding via `export_backup()` and `import_backup()`. See [Backup & Restore](../guides/backup-restore.md).
 
 ## Core Methods
 
@@ -148,6 +152,70 @@ if not status["healthy"]:
     print(f"Embedding: {status['embedding']['working']}")
 ```
 
+### `export_backup(path: str)`
+
+Exports all memory data to a JSON backup file. Vectors are excluded; only text content and metadata are preserved.
+
+**Source:** `core.py:635`
+
+*   **Input:** `path: str` - Output file path.
+*   **Return:** `None`
+
+**Backup Format:**
+```json
+{
+    "version": "1.0",
+    "exported_at": "2026-04-12T10:30:00+00:00",
+    "embed_config": {"dimensions": 384},
+    "lancedb": {
+        "raw_facts": [{"id": "...", "content": "...", ...}],
+        "long_term": [...],
+        "personalization": [...],
+        "temporal_sessions": [...]
+    },
+    "neo4j": {
+        "personalizations": [{"id": "...", "content": "...", "relationships": [...]}],
+        "temporal_sessions": [...],
+        "sessions": [...]
+    }
+}
+```
+
+**Use Cases:**
+- Migrating to a different embedding model (different dimensions).
+- Creating disaster recovery backups.
+- Transferring memory between environments.
+
+**Example:**
+```python
+memory.export_backup("./backup_20260412.json")
+```
+
+### `import_backup(path: str, reembed: bool = True)`
+
+Imports memory data from a JSON backup file. Re-embeds all content using the current embedding function.
+
+**Source:** `core.py:646`
+
+*   **Input:**
+    *   `path: str` - Backup file path.
+    *   `reembed: bool` - If `True`, re-embeds all content. If `False`, validates that backup dimensions match current `embed_dim` (raises `ValueError` on mismatch).
+*   **Return:** `None`
+
+**Behavior:**
+1. Validates backup version (must be "1.0").
+2. If `reembed=False`, checks that backup dimensions match current `embed_dim`.
+3. Clears existing data in both LanceDB and Neo4j.
+4. Re-embeds all content using the current embedding function.
+5. Restores all data including relationships and metadata.
+
+**Example:**
+```python
+# After changing embedding model
+memory = Outomem(..., embed_dim=768)  # New model
+memory.import_backup("./backup_20260412.json", reembed=True)
+```
+
 ## Private Methods
 
 These methods handle internal logic for sentiment and memory maintenance.
@@ -196,7 +264,8 @@ memory = Outomem(
     embed_model="text-embedding-3-small",
     neo4j_uri="bolt://localhost:7687",
     neo4j_user="neo4j",
-    neo4j_password="password"
+    neo4j_password="password",
+    embed_dim=768,  # Match your embedding model dimensions
 )
 
 # Store information
@@ -205,4 +274,7 @@ memory.remember("My name is Luke and I'm a software engineer.")
 # Retrieve context
 context = memory.get_context("Who am I?")
 print(context)
+
+# Backup before changing embedding model
+memory.export_backup("./backup.json")
 ```

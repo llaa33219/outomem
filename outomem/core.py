@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from typing import Any
 
-from outomem.layers import LayerManager
+from outomem.layers import DEFAULT_VECTOR_DIM, LayerManager
 from outomem.neo4j_layers import Neo4jLayerManager
 from outomem.prompts import (
     get_consolidation_prompt,
@@ -77,10 +79,12 @@ class Outomem:
         neo4j_password: str,
         db_path: str = "./outomem.lance",
         style_path: str = "./style.md",
+        embed_dim: int = DEFAULT_VECTOR_DIM,
     ) -> None:
         self._provider = create_provider(provider, base_url, api_key, model)
+        self._embed_dim = embed_dim
         embed_fn = self._create_api_embed_fn(embed_api_url, embed_api_key, embed_model)
-        self._lancedb = LayerManager(db_path, embed_fn=embed_fn)
+        self._lancedb = LayerManager(db_path, embed_fn=embed_fn, vector_dim=embed_dim)
         self._neo4j = Neo4jLayerManager(
             uri=neo4j_uri,
             auth=(neo4j_user, neo4j_password),
@@ -627,3 +631,33 @@ Rules:
                 result["errors"] = errors
 
         return result
+
+    def export_backup(self, path: str) -> None:
+        backup = {
+            "version": "1.0",
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "embed_config": {"dimensions": self._embed_dim},
+            "lancedb": self._lancedb.export_data(),
+            "neo4j": self._neo4j.export_data(),
+        }
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump(backup, file, ensure_ascii=False, indent=2)
+
+    def import_backup(self, path: str, reembed: bool = True) -> None:
+        with open(path, encoding="utf-8") as file:
+            backup = json.load(file)
+
+        if not isinstance(backup, dict):
+            raise ValueError("Backup file must contain a JSON object")
+        if backup.get("version") != "1.0":
+            raise ValueError(f"Unsupported backup version: {backup.get('version')}")
+
+        backup_dimensions = backup.get("embed_config", {}).get("dimensions")
+        if not reembed and backup_dimensions != self._embed_dim:
+            raise ValueError(
+                "Cannot import without re-embedding when backup dimensions do not match the current embedding configuration"
+            )
+
+        embed_fn = self._lancedb._embed_fn
+        self._lancedb.import_data(backup.get("lancedb", {}), embed_fn)
+        self._neo4j.import_data(backup.get("neo4j", {}), embed_fn)

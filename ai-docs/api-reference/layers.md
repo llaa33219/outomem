@@ -4,20 +4,37 @@ The `LayerManager` class handles vector storage and retrieval using LanceDB. It 
 
 ## Constants
 
-| Constant | Value | Line |
+| Constant | Value | Description |
 | :--- | :--- | :--- |
-| `VECTOR_DIM` | 384 | 14 |
-| `DEFAULT_LOCAL_MODEL` | "sentence-transformers/all-MiniLM-L6-v2" | 15 |
+| `DEFAULT_VECTOR_DIM` | 384 | Default embedding dimensions for `all-MiniLM-L6-v2`. |
+| `DEFAULT_LOCAL_MODEL` | "sentence-transformers/all-MiniLM-L6-v2" | Default local embedding model. |
+
+## Schemas
+
+### `build_schemas(vector_dim: int) -> dict[str, pa.Schema]`
+
+Dynamically builds PyArrow schemas for all four memory tables with the specified vector dimensions.
+
+**Parameters:**
+- `vector_dim`: Embedding vector dimensions (e.g., 384, 768, 3072).
+
+**Returns:** Dictionary mapping table names to PyArrow schemas.
+
+**Source:** [layers.py:33-91](../../outomem/layers.py#L33)
 
 ## Constructor
 
-### `LayerManager(db_path: str, embed_fn: EmbeddingFunction | None)`
-Initializes the LanceDB connection and ensures all layer tables exist.
+### `LayerManager(db_path: str, embed_fn: EmbeddingFunction | None, vector_dim: int = 384)`
+
+Initializes the LanceDB connection and ensures all layer tables exist with the correct vector dimensions.
 
 - **db_path**: Path to the LanceDB database file.
 - **embed_fn**: Optional custom embedding function. Defaults to `fastembed` with `all-MiniLM-L6-v2`.
+- **vector_dim**: Embedding vector dimensions. Must match the output of `embed_fn`. Default: 384.
 
-**Source:** [lines 95-102](../../outomem/layers.py#L95)
+**Important:** The `vector_dim` parameter determines the schema for all tables. Changing it on an existing database requires re-embedding via `export_data()` and `import_data()`.
+
+**Source:** [lines 95-105](../../outomem/layers.py#L95)
 
 ## EmbeddingFunction Protocol
 
@@ -41,7 +58,7 @@ Stores atomic facts extracted from conversations.
 | `conversation` | utf8 | ID of the source conversation. |
 | `layer` | utf8 | Always "raw_facts". |
 | `created_at` | timestamp | Creation time (UTC). |
-| `vector` | list[float32] | 384-dimensional embedding. |
+| `vector` | list[float32] | Embedding vector (dimensions set at initialization). |
 
 **Source:** [lines 33-42](../../outomem/layers.py#L33)
 
@@ -57,7 +74,7 @@ Stores consolidated, high-level knowledge.
 | `created_at` | timestamp | Creation time (UTC). |
 | `updated_at` | timestamp | Last update time (UTC). |
 | `access_count` | int64 | Number of times retrieved. |
-| `vector` | list[float32] | 384-dimensional embedding. |
+| `vector` | list[float32] | Embedding vector (dimensions set at initialization). |
 
 **Source:** [lines 43-54](../../outomem/layers.py#L43)
 
@@ -80,7 +97,7 @@ Stores user preferences, traits, and habits with decay mechanics.
 | `access_count` | int64 | Number of times retrieved. |
 | `contradiction_with` | utf8 | ID of contradictory fact. |
 | `is_active` | bool | False if superseded. |
-| `vector` | list[float32] | 384-dimensional embedding. |
+| `vector` | list[float32] | Embedding vector (dimensions set at initialization). |
 
 **Source:** [lines 55-75](../../outomem/layers.py#L55)
 
@@ -96,7 +113,7 @@ Tracks session-specific events and state changes.
 | `timestamp` | timestamp | Event time (UTC). |
 | `layer` | utf8 | Always "temporal_sessions". |
 | `metadata` | string | JSON metadata. |
-| `vector` | list[float32] | 384-dimensional embedding. |
+| `vector` | list[float32] | Embedding vector (dimensions set at initialization). |
 | `related_personalization_id` | utf8 | ID of linked personalization. |
 | `old_content` | utf8 | Previous state content. |
 | `new_content` | utf8 | New state content. |
@@ -170,4 +187,42 @@ Returns a dict mapping each table name to its accessibility status.
 Returns row counts. Returns `-1` for tables that fail to open.
 
 ### `check_embedding(test_text: str = "health check test") -> bool`
-Validates that the embedding function returns a 384-dimensional float list.
+Validates that the embedding function returns a float list matching the configured `vector_dim`.
+
+## Backup Methods
+
+These methods enable data export and import for migration between embedding models.
+
+### `export_data() -> dict[str, Any]`
+
+Exports all four table contents without vectors. Used internally by `Outomem.export_backup()`.
+
+**Source:** [layers.py:167](../../outomem/layers.py#L167)
+
+**Returns:**
+```python
+{
+    "raw_facts": [{"id": "...", "content": "...", "created_at": "ISO", ...}],
+    "long_term": [...],
+    "personalization": [...],
+    "temporal_sessions": [...]
+}
+```
+
+Vectors are excluded from the export. Timestamps are serialized to ISO format strings.
+
+### `import_data(data: dict[str, Any], embed_fn: EmbeddingFunction) -> None`
+
+Imports data from a backup dictionary, re-embedding all content. Used internally by `Outomem.import_backup()`.
+
+**Source:** [layers.py:181](../../outomem/layers.py#L181)
+
+**Parameters:**
+- `data`: Backup dictionary with table contents.
+- `embed_fn`: Embedding function to re-embed all content.
+
+**Behavior:**
+1. Clears all existing table data.
+2. Re-embeds all `content` fields using `embed_fn`.
+3. Restores all metadata (strength, access_count, timestamps, etc.).
+4. Preserves original IDs for cross-DB relationship consistency.

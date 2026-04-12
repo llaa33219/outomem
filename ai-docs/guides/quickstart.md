@@ -46,7 +46,7 @@ Wait a few seconds for the database to initialize. You can access the browser in
 
 ## Initialize Outomem
 
-Create a new Python file and initialize the `Outomem` class. You must provide all 12 configuration parameters.
+Create a new Python file and initialize the `Outomem` class. You must provide all configuration parameters including `embed_dim` to match your embedding model.
 
 ```python
 from outomem import Outomem
@@ -64,11 +64,20 @@ outomem = Outomem(
     neo4j_user="neo4j",
     neo4j_password="password",
     db_path="./outomem.lance",
-    style_path="./style.md"
+    style_path="./style.md",
+    embed_dim=768,  # Match your embedding model dimensions
 )
 
 print("Outomem initialized.")
 ```
+
+**Important:** The `embed_dim` parameter must match your embedding model's output dimensions:
+
+| Model | `embed_dim` |
+| :--- | :--- |
+| `all-MiniLM-L6-v2` | 384 |
+| `text-embedding-3-small` | 768 |
+| `text-embedding-3-large` | 3072 |
 
 Expected output:
 ```text
@@ -133,3 +142,4 @@ Now that you've mastered the basics, explore these resources:
 - [Architecture Overview](../architecture.md) - Learn how the four layers work.
 - [Design Philosophy](../philosophy.md) - Understand the Korean first design approach.
 - [API Reference](../api-reference/outomem.md) - Detailed documentation for the main Outomem class.
+- [Backup & Restore](backup-restore.md) - Preserve memories when changing embedding models.
