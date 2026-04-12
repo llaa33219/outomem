@@ -170,7 +170,6 @@ class Outomem:
         personal = parsed.get("personal", [])
         factual = parsed.get("factual", [])
         temporal = parsed.get("temporal", [])
-        do_not_store = parsed.get("do_not_store", [])
 
         duplicates_found = False
         personal_contents = []
