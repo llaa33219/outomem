@@ -21,6 +21,8 @@ class Neo4jLayerManager:
         self._uri = uri
         self._auth = auth
         self._database = database
+        self._last_connection_error: str | None = None
+        self._last_node_count_errors: dict[str, str] = {}
         self._driver = GraphDatabase.driver(uri, auth=auth)
         self._init_constraints()
 
@@ -442,12 +444,25 @@ class Neo4jLayerManager:
             records, _, _ = self._driver.execute_query(
                 "RETURN 1 AS health", database_=self._database
             )
-            return len(records) == 1 and records[0]["health"] == 1
-        except (Neo4jError, ServiceUnavailable):
+            is_ok = len(records) == 1 and records[0]["health"] == 1
+            if is_ok:
+                self._last_connection_error = None
+            else:
+                self._last_connection_error = "Unexpected query result"
+            return is_ok
+        except (Neo4jError, ServiceUnavailable) as e:
+            self._last_connection_error = f"{type(e).__name__}: {e}"
             return False
+        except Exception as e:
+            self._last_connection_error = f"Unexpected error: {type(e).__name__}: {e}"
+            return False
+
+    def get_last_connection_error(self) -> str | None:
+        return self._last_connection_error
 
     def get_node_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
+        self._last_node_count_errors = {}
         queries = {
             "personalization": "MATCH (p:Personalization) RETURN count(p) AS cnt",
             "temporal_session": "MATCH (t:TemporalSession) RETURN count(t) AS cnt",
@@ -459,6 +474,15 @@ class Neo4jLayerManager:
                     query, database_=self._database
                 )
                 counts[name] = records[0]["cnt"] if records else 0
-            except (Neo4jError, ServiceUnavailable):
+            except (Neo4jError, ServiceUnavailable) as e:
                 counts[name] = -1
+                self._last_node_count_errors[name] = f"{type(e).__name__}: {e}"
+            except Exception as e:
+                counts[name] = -1
+                self._last_node_count_errors[name] = (
+                    f"Unexpected error: {type(e).__name__}: {e}"
+                )
         return counts
+
+    def get_last_node_count_errors(self) -> dict[str, str]:
+        return self._last_node_count_errors.copy()

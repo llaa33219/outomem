@@ -99,6 +99,9 @@ class LayerManager:
     ) -> None:
         self._db = lancedb.connect(db_path)
         self._embed_fn = embed_fn or _default_fastembed_embed
+        self._last_connection_error: str | None = None
+        self._last_table_errors: dict[str, str] = {}
+        self._last_embedding_error: str | None = None
         self._init_collections()
 
     def _compute_embedding(self, text: str) -> list[float]:
@@ -522,13 +525,20 @@ class LayerManager:
         """Check if LanceDB connection is alive."""
         try:
             _ = self._db.list_tables()
+            self._last_connection_error = None
             return True
-        except Exception:
+        except Exception as e:
+            self._last_connection_error = f"{type(e).__name__}: {e}"
             return False
+
+    def get_last_connection_error(self) -> str | None:
+        """Get the last connection error message, if any."""
+        return self._last_connection_error
 
     def check_tables(self) -> dict[str, bool]:
         """Check if all required tables exist and are accessible."""
         results: dict[str, bool] = {}
+        self._last_table_errors = {}
         existing = self._db.list_tables().tables
         for name in SCHEMAS:
             try:
@@ -538,9 +548,15 @@ class LayerManager:
                     results[name] = True
                 else:
                     results[name] = False
-            except Exception:
+                    self._last_table_errors[name] = "Table not found"
+            except Exception as e:
                 results[name] = False
+                self._last_table_errors[name] = f"{type(e).__name__}: {e}"
         return results
+
+    def get_last_table_errors(self) -> dict[str, str]:
+        """Get table-specific errors from the last check."""
+        return self._last_table_errors.copy()
 
     def get_table_stats(self) -> dict[str, int]:
         """Get row count for each table."""
@@ -557,10 +573,23 @@ class LayerManager:
         """Verify embedding function works correctly."""
         try:
             embedding = self._compute_embedding(test_text)
-            return (
+            is_valid = (
                 isinstance(embedding, list)
                 and len(embedding) == VECTOR_DIM
                 and all(isinstance(x, float) for x in embedding)
             )
-        except Exception:
+            if is_valid:
+                self._last_embedding_error = None
+            else:
+                self._last_embedding_error = (
+                    f"Invalid embedding: expected list of {VECTOR_DIM} floats, "
+                    f"got {type(embedding).__name__} with length {len(embedding) if isinstance(embedding, list) else 'N/A'}"
+                )
+            return is_valid
+        except Exception as e:
+            self._last_embedding_error = f"{type(e).__name__}: {e}"
             return False
+
+    def get_last_embedding_error(self) -> str | None:
+        """Get the last embedding error message, if any."""
+        return self._last_embedding_error

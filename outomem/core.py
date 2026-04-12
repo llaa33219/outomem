@@ -588,7 +588,7 @@ Rules:
         all_tables_ok = all(tables.values())
         overall = lancedb_ok and all_tables_ok and embedding_ok and neo4j_ok
 
-        return {
+        result: dict[str, Any] = {
             "healthy": overall,
             "lancedb": {
                 "connected": lancedb_ok,
@@ -601,3 +601,29 @@ Rules:
                 "node_counts": node_counts,
             },
         }
+
+        if not overall:
+            errors: dict[str, Any] = {}
+            if not lancedb_ok:
+                conn_err = self._lancedb.get_last_connection_error()
+                if conn_err:
+                    errors["lancedb_connection"] = conn_err
+            if not all_tables_ok:
+                table_errs = self._lancedb.get_last_table_errors()
+                if table_errs:
+                    errors["lancedb_tables"] = table_errs
+            if not embedding_ok:
+                embed_err = self._lancedb.get_last_embedding_error()
+                if embed_err:
+                    errors["embedding"] = embed_err
+            if not neo4j_ok:
+                neo4j_err = self._neo4j.get_last_connection_error()
+                if neo4j_err:
+                    errors["neo4j_connection"] = neo4j_err
+            node_errs = self._neo4j.get_last_node_count_errors()
+            if node_errs:
+                errors["neo4j_queries"] = node_errs
+            if errors:
+                result["errors"] = errors
+
+        return result
